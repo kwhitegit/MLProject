@@ -1,0 +1,153 @@
+---
+title: "Machine Learning Prediction Assignment"
+author: "KW"
+date: "February 28, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(caret)
+library(randomForest)
+
+# Verify/download files
+if (!file.exists("./pml-training.csv")) {
+        fileUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+        download.file(fileUrl, destfile = "./pml-training.csv") }
+if (!file.exists("./pml-testing.csv")) {
+        fileUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+        download.file(fileUrl, destfile = "./pml-testing.csv") }
+
+# Load training set
+dTraining <- read.csv("./pml-training.csv", na.strings = c("", "NA"))
+finalTest <- read.csv("./pml-testing.csv", na.strings = c("", "NA"))
+```
+
+# Summary
+A random forest model provides a good algorithm for predicting the correctness of exercises with an accuracy rate of over 99%. 
+
+# Background
+Groupware@LES performed a study of body movement measurements on six athletes performing a series of Unilateral Dumbbell Biceps Curls exercises in five different fashions: according to specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D), and throwing the hips to the front (Class E). The data was provided for analysis to determine if it was possible to predict the fashion in which the curl was being performed. Additional information and the research group's paper can be found at
+[http://groupware.les.inf.puc-rio.br/har](http://groupware.les.inf.puc-rio.br/har).  
+
+# Model
+The base training data set contains 19622 observations of 160 variables. Variable "classe" is the specification class we are trying to predict and is a factor variable of 5 levels (A, B, C, D, E) matching the classes of weight lifting fashions. The official test set will be cleansed along side in the same manner to provide a model match to use when predicting outcomes.  
+```{r dim1}
+dim(dTraining)
+```
+
+### Data Cleansing
+In preparing the data for modeling, I first replaced all blank, "#DIV/0!", and "NA" values with "0".  
+```{r dataCleanse}
+for (i in 8:159) {
+        dTraining[,i] <- gsub("#DIV/0!|^$","0",dTraining[,i])
+        finalTest[,i] <- gsub("#DIV/0!|^$","0",finalTest[,i])
+}
+dTraining[is.na(dTraining)] <- "0"
+finalTest[is.na(finalTest)] <- "0"
+```
+  
+The first seven columns are all factor data related to specifying information about the athlete and time period the activity was performed. These are not useful to the prediction model so they will be removed to simplify the model. The remaining variables, with the exception of the final variable "classe" contain numeric data but are not all indicated as numeric. They will be converted to numeric.  
+```{r colAdjust}
+dTraining <- dTraining[,-c(1:7)]
+finalTest <- finalTest[,-c(1:7)]
+
+idC <- c(5:ncol(dTraining)-1)
+dTraining[,idC] = apply(dTraining[,idC], 2, function(x) as.numeric(as.character(x)))
+finalTest[,idC] = apply(finalTest[,idC], 2, function(x) as.numeric(as.character(x)))
+```
+  
+Now that the variables are all numeric, the variance within each variable can be checked and those which are close to zero can be removed: these will not make good predictors in the model.  
+```{r nearZero, cache=TRUE}
+idxNearZero <- nearZeroVar(dTraining)
+dTraining <- dTraining[,-idxNearZero]
+finalTest <- finalTest[,-idxNearZero]
+```
+  
+To train the data, the original training set is broken into two groups with 70% going to the training set and the remaining 30% set aside to test the model's predictions.  
+```{r}
+set.seed(13531)
+trainIndex = createDataPartition(dTraining$classe, p = 0.70, list=FALSE)
+
+setTraining = dTraining[trainIndex,]
+setTesting = dTraining[-trainIndex,]
+```
+  
+The resulting sets utilize 52 predictor variables plus the one that needs to be predicted.  
+```{r}
+rbind("Original Dataset" = dim(dTraining), 
+      "Training Set" = dim(setTraining), 
+      "Testing Set" = dim(setTesting),
+      "Final Test" = dim(finalTest))
+```      
+
+### Model Creation
+Random Forest is the first model selected to try as it is considered one of the most accurate algorithms although it can be one of the slowest.  
+```{r modelRF, cache=TRUE}
+set.seed(24642)
+modelFitRf <- randomForest(classe ~., data = setTraining, importance = TRUE, keep.forest = TRUE)
+```
+
+# Validation and Prediction
+The test partition is run against the random forest model.  
+```{r prediction}
+modelPredict <- predict(modelFitRf, newdata = setTesting)
+
+modelValidation <- setTesting
+modelValidation$predicted <- modelPredict == setTesting$classe
+# table(modelPredict, modelValidation$classe)
+# modelPostResam <- postResample(modelPredict, modelValidation$classe)
+```
+  
+Comparing the error rate of the training set to the error rate of the test set, the test set had a lower error rate (0.42%) compared to the training set (0.52%) as is expected with random forest models. The accuracy rate of the model when applied to the test set was 99.58%. No additional models will be selected to compare.  
+```{r errorXval}
+modelConfMatrix <- confusionMatrix(modelPredict, modelValidation$classe)
+
+modelAccuracy <- modelConfMatrix$overall[1]*100
+modelAccuracy
+
+modelConfMatrixTable <- modelConfMatrix$table
+modelConfMatrixTable
+
+trainErrorRate <- (nrow(setTraining) - 
+         (modelFitRf$confusion[1,1] + modelFitRf$confusion[2,2] + 
+                  modelFitRf$confusion[3,3] + modelFitRf$confusion[4,4] +
+                  modelFitRf$confusion[5,5])) / nrow(setTraining)*100
+
+testErrorRate <- (nrow(setTesting) - 
+         (modelConfMatrixTable[1,1] + modelConfMatrixTable[2,2] + 
+                  modelConfMatrixTable[3,3] + modelConfMatrixTable[4,4] +
+                  modelConfMatrixTable[5,5])) / nrow(setTesting)*100
+
+rbind(trainErrorRate,testErrorRate)
+```
+
+
+### Variable Importance
+Variables important to the model are as follows in the next figure.  
+```{r varImportance}
+varImpPlot(modelFitRf)
+```
+
+<!-- # What you should submit   -->
+
+<!-- The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with.    -->
+
+<!-- You should create a report describing   -->
+
+<!-- * how you built your model -->
+<!-- * how you used cross validation -->
+<!-- * what you think the expected out of sample error is -->
+<!-- * why you made the choices you did   -->
+
+<!-- You will also use your prediction model to predict 20 different test cases.   -->
+
+<!-- # Peer Review Portion -->
+
+<!-- Your submission for the Peer Review portion should consist of a   -->
+
+<!-- * link to a Github repo with your R markdown and compiled HTML file describing your analysis   -->
+
+<!-- Please constrain the text of the writeup to < 2000 words and the number of figures to be less than 5. It will make it easier for the graders if you submit a repo with a gh-pages branch so the HTML page can be viewed online (and you always want to make it easy on graders :-). -->
+
+
